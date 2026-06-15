@@ -1,5 +1,24 @@
 # pyIntesisHome
 
+## Experimental branch: `poc_timeouts`
+
+> **Note:** This is a personal fork of [jnimmo/pyIntesisHome](https://github.com/jnimmo/pyIntesisHome). The `poc_timeouts` branch contains experimental fixes for regular cloud connection timeouts that affect IntesisHome, anywAir, and airconwithme devices.
+
+### Problem
+
+Cloud-connected devices use a persistent TCP connection that regularly drops silently due to NAT/firewall idle timeouts (typically 30–90 seconds). The upstream library only sends a keepalive every 120 seconds, so a dead connection can go undetected for up to 2–10 minutes. During this window, Home Assistant sees the device as connected but commands are lost and state updates stop arriving.
+
+### What this branch experiments with
+
+1. **Reduced keepalive interval** — from 120 s down to 30 s, keeping the connection alive through most NAT devices
+2. **Read timeout on `readuntil`** — wraps the blocking read in `asyncio.wait_for(..., timeout=180)` so zombie half-open TCP connections are detected promptly
+3. **OS-level TCP keepalive** — enables `SO_KEEPALIVE` on the socket so the kernel probes the connection independently of the application layer
+4. **Cleaner auth wait** — replaces a 100 ms busy-poll loop with `asyncio.wait_for` on the response event
+
+This branch is used by the [engelchrisi/hass-intesishome](https://github.com/engelchrisi/hass-intesishome) fork for end-to-end testing in a real Home Assistant environment.
+
+---
+
 This project is a python3 library for interfacing with Intesis air conditioning controllers, including cloud control of IntesisHome (Airconwithme + anywAiR) and local control of IntesisBox devices.
 It is fully asynchronous using the aiohttp library, and utilises the private API used by the IntesisHome mobile apps.
 
