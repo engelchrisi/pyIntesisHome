@@ -4,6 +4,7 @@ import asyncio
 import json
 import logging
 import socket
+import sys
 from typing import NamedTuple
 
 import aiohttp
@@ -103,7 +104,11 @@ class IntesisHome(IntesisBase):
     async def _send_keepalive(self):
         try:
             while True:
-                await asyncio.sleep(120)
+                # 30 s keeps us well under the 60-90 s idle timeout that most
+                # NAT devices and cloud load-balancers enforce.  The old 120 s
+                # value let the connection go silently dead before we wrote
+                # anything, causing zombie connections that lasted minutes.
+                await asyncio.sleep(30)
                 _LOGGER.debug("sending keepalive to %s", self._device_type)
                 device_id = str(next(iter(self._devices)))
                 message = (
@@ -228,6 +233,17 @@ class IntesisHome(IntesisBase):
                     self._reader, self._writer = await asyncio.open_connection(
                         self._cmd_server, self._cmd_server_port
                     )
+                    # Enable OS-level TCP keepalive so the kernel probes the
+                    # connection every ~10 s after 30 s of idle and declares it
+                    # dead after 3 missed probes (~60 s total).  This is much
+                    # faster than waiting for application writes to fail.
+                    _sock = self._writer.transport.get_extra_info("socket")
+                    if _sock is not None:
+                        _sock.setsockopt(socket.SOL_SOCKET, socket.SO_KEEPALIVE, 1)
+                        if sys.platform != "win32":
+                            _sock.setsockopt(socket.IPPROTO_TCP, socket.TCP_KEEPIDLE, 30)
+                            _sock.setsockopt(socket.IPPROTO_TCP, socket.TCP_KEEPINTVL, 10)
+                            _sock.setsockopt(socket.IPPROTO_TCP, socket.TCP_KEEPCNT, 3)
                 except OSError as exc:
                     _LOGGER.warning(
                         "Connection to %s:%s failed: %s; auto-reconnect will retry",

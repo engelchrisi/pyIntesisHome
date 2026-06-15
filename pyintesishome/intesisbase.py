@@ -95,17 +95,20 @@ class IntesisBase:
                 await self._writer.drain()
                 if not wait_for_response:
                     return
-                timeout = 5.0
-                start_time = asyncio.get_event_loop().time()
-                while not self._received_response.is_set():
-                    if asyncio.get_event_loop().time() - start_time > timeout:
-                        _LOGGER.error(
-                            "Timeout waiting for response from %s; closing socket",
-                            self._device_type,
-                        )
-                        self._close_writer()
-                        break
-                    await asyncio.sleep(0.1)
+                try:
+                    # Wait for _data_received to set the event after any
+                    # incoming frame.  Using wait_for instead of a sleep loop
+                    # wakes up immediately when the response arrives rather
+                    # than after the next 100 ms tick.
+                    await asyncio.wait_for(
+                        self._received_response.wait(), timeout=5.0
+                    )
+                except asyncio.TimeoutError:
+                    _LOGGER.error(
+                        "Timeout waiting for response from %s; closing socket",
+                        self._device_type,
+                    )
+                    self._close_writer()
         except OSError as exc:
             _LOGGER.error(
                 "%s Exception sending command: %s",
@@ -132,10 +135,24 @@ class IntesisBase:
         except Exception:  # pylint: disable=broad-exception-caught
             pass
 
+    # How long to wait for any data from the server before treating the
+    # connection as dead.  Set to 3× the keepalive interval so a single
+    # missed keepalive doesn't trigger a false disconnect, but a half-open
+    # TCP connection (NAT drop with no RST) is detected within ~90 s rather
+    # than after minutes of OS-level TCP retransmit timeouts.
+    _READ_TIMEOUT = 90.0
+
     async def _data_received(self):
         try:
             while self._reader:
-                raw_data = await self._reader.readuntil(self._data_delimiter)
+                # Wrap readuntil with a timeout so half-open TCP connections
+                # (server unreachable but no RST received — common after NAT
+                # silently drops the session) are detected promptly instead of
+                # blocking indefinitely.
+                raw_data = await asyncio.wait_for(
+                    self._reader.readuntil(self._data_delimiter),
+                    timeout=self._READ_TIMEOUT,
+                )
                 if not raw_data:
                     break
                 data = raw_data.decode("ascii")
@@ -150,6 +167,13 @@ class IntesisBase:
         except IncompleteReadError:
             _LOGGER.debug(
                 "pyIntesisHome lost connection to the %s server", self._device_type
+            )
+        except asyncio.TimeoutError:
+            # No data arrived within _READ_TIMEOUT seconds — the connection is
+            # a zombie (half-open TCP).  Close the writer to trigger reconnect.
+            _LOGGER.warning(
+                "pyIntesisHome read timeout on %s connection; reconnecting",
+                self._device_type,
             )
         except asyncio.CancelledError:
             pass
