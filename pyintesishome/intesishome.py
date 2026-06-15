@@ -66,7 +66,7 @@ class IntesisHome(IntesisBase):
         self._set_ack_timeout = 5.0
 
     async def _parse_response(self, decoded_data):
-        _LOGGER.debug("%s API Received: %s", self._device_type, decoded_data)
+        _LOGGER.debug("Parsing: %s", decoded_data)
         resp = json.loads(decoded_data)
         # Parse response
         if resp["command"] == "connect_rsp":
@@ -77,6 +77,12 @@ class IntesisHome(IntesisBase):
                 self._connecting = False
                 self._connection_retries = 0
                 await self._send_update_callback()
+            else:
+                _LOGGER.warning(
+                    "%s connect_rsp rejected by server: %s",
+                    self._device_type,
+                    resp["data"].get("status"),
+                )
         elif resp["command"] == "status":
             # Value has changed
             self._update_device_state(
@@ -166,6 +172,9 @@ class IntesisHome(IntesisBase):
         """Retry connect() with exponential backoff until reconnected or stopped."""
         delay = self._reconnect_delay_initial
         while self._should_reconnect and not self._connected:
+            _LOGGER.info(
+                "Waiting %ss before reconnecting to %s API", delay, self._device_type
+            )
             try:
                 await asyncio.sleep(delay)
             except asyncio.CancelledError:
@@ -244,6 +253,9 @@ class IntesisHome(IntesisBase):
                             _sock.setsockopt(socket.IPPROTO_TCP, socket.TCP_KEEPIDLE, 30)
                             _sock.setsockopt(socket.IPPROTO_TCP, socket.TCP_KEEPINTVL, 10)
                             _sock.setsockopt(socket.IPPROTO_TCP, socket.TCP_KEEPCNT, 3)
+                            _LOGGER.debug("TCP keepalive enabled (idle=30s, intvl=10s, cnt=3)")
+                        else:
+                            _LOGGER.debug("TCP keepalive enabled (SO_KEEPALIVE only, Windows)")
                 except OSError as exc:
                     _LOGGER.warning(
                         "Connection to %s:%s failed: %s; auto-reconnect will retry",

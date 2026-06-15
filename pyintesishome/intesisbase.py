@@ -132,8 +132,8 @@ class IntesisBase:
             return
         try:
             writer.close()
-        except Exception:  # pylint: disable=broad-exception-caught
-            pass
+        except Exception as exc:  # pylint: disable=broad-exception-caught
+            _LOGGER.debug("Ignoring %s while closing writer: %s", type(exc).__name__, exc)
 
     # How long to wait for any data from the server before treating the
     # connection as dead.  Set to 3× the keepalive interval so a single
@@ -156,8 +156,6 @@ class IntesisBase:
                 if not raw_data:
                     break
                 data = raw_data.decode("ascii")
-                _LOGGER.debug("Received: %s", data)
-
                 await self._parse_response(data)
 
                 if not self._received_response.is_set():
@@ -165,8 +163,9 @@ class IntesisBase:
                     self._received_response.set()
 
         except IncompleteReadError:
-            _LOGGER.debug(
-                "pyIntesisHome lost connection to the %s server", self._device_type
+            _LOGGER.warning(
+                "pyIntesisHome lost connection to the %s server (server closed the socket)",
+                self._device_type,
             )
         except asyncio.TimeoutError:
             # No data arrived within _READ_TIMEOUT seconds — the connection is
